@@ -1,0 +1,17 @@
+// Niri keybinding for VoiceInput
+// Add this to your niri config (~/.config/niri/config.kdl or similar)
+
+// Bind Space to trigger voiceinput
+// When Space is pressed, it spawns the trigger script which signals voiceinput
+keybinds = [
+  {
+    keys = ["Space"]
+    action = { spawn = ["/home/antony/coding/voiceinput/trigger.sh"] }
+  }
+]
+
+// Alternative: Use a modifier if you want Space to work only in certain contexts
+// {
+//   keys = ["Super", "Space"]
+//   action = { spawn = ["/home/antony/coding/voiceinput/trigger.sh"] }
+// }

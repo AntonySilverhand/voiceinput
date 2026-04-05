@@ -1,0 +1,33 @@
+{
+  "provider": "gemini",
+  "ollama": {
+    "host": "http://localhost:11434",
+    "transcription_model": "whisper-tiny",
+    "processing_model": "gpt-oss:cloud"
+  },
+  "gemini": {
+    "api_key": "YOUR_GEMINI_API_KEY_HERE"
+  },
+  "hotkey": {
+    "modifier": "Ctrl",
+    "key": "Space"
+  },
+  "audio": {
+    "sample_rate": 16000,
+    "channels": 1,
+    "chunk_duration_ms": 5000
+  },
+  "text_injection": {
+    "method": "wtype",
+    "fallback": "wtype"
+  },
+  "refinement": {
+    "enabled": true,
+    "remove_fillers": true,
+    "auto_punctuate": true
+  },
+  "history": {
+    "enabled": true,
+    "max_entries": 1000
+  }
+}

@@ -1,0 +1,20 @@
+# Build output
+build/
+*.o
+*.so
+*.a
+*.out
+voiceinput
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Config (user-specific)
+config.json
+
+# Logs
+*.log
