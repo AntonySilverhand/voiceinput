@@ -106,6 +106,9 @@ typedef struct {
     volatile sig_atomic_t is_recording;  // volatile for PortAudio callback thread safety
     int sample_rate;
     int channels;
+    // VAD state
+    int vad_triggered;         // 1 once speech is detected
+    float vad_energy;          // smoothed RMS energy for VAD
 } vi_audio_ctx_t;
 
 // Ollama client context

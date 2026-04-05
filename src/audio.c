@@ -3,6 +3,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include <math.h>
 #include <pthread.h>
 
 // Mutex protecting ring buffer fields (size, read_pos, write_pos, data)
@@ -88,6 +89,7 @@ static int audio_callback(const void *input, void *output,
                           const PaStreamCallbackTimeInfo *time_info,
                           PaStreamCallbackFlags status_flags,
                           void *user_data) {
+    (void)output; (void)time_info; (void)status_flags;
     vi_audio_ctx_t *ctx = (vi_audio_ctx_t *)user_data;
     const float *input_data = (const float *)input;
 
@@ -95,8 +97,31 @@ static int audio_callback(const void *input, void *output,
         return paContinue;
     }
 
-    // Push audio data to ring buffer
-    vi_ring_buffer_push(ctx->buffer, input_data, frame_count * ctx->channels);
+    size_t n = frame_count * ctx->channels;
+
+    // VAD: compute RMS energy to detect speech
+    float energy = 0.0f;
+    for (size_t i = 0; i < n; i++) {
+        float s = input_data[i];
+        energy += s * s;
+    }
+    energy = sqrtf(energy / (float)n);
+
+    // Smooth energy (EMA)
+    ctx->vad_energy = ctx->vad_energy * 0.7f + energy * 0.3f;
+
+    // Threshold for speech detection (mic hiss is typically < 0.01 RMS)
+    // If energy exceeds threshold, VAD is triggered
+    if (!ctx->vad_triggered && ctx->vad_energy > 0.01f) {
+        ctx->vad_triggered = 1;
+    }
+
+    // Only store audio once VAD has triggered (speech detected)
+    // This prevents silence from filling the buffer and overwriting
+    // the beginning of the utterance
+    if (ctx->vad_triggered) {
+        vi_ring_buffer_push(ctx->buffer, input_data, n);
+    }
 
     return paContinue;
 }
@@ -195,6 +220,10 @@ int vi_audio_start(vi_audio_ctx_t *ctx) {
         ctx->buffer->write_pos = 0;
         memset(ctx->buffer->data, 0, ctx->buffer->capacity * sizeof(float));
     }
+
+    // Reset VAD state — silence before speech onset should not be recorded
+    ctx->vad_triggered = 0;
+    ctx->vad_energy = 0.0f;
 
     // Set flag BEFORE starting stream — PortAudio callback may fire immediately
     // and we cannot afford to drop the first frames.

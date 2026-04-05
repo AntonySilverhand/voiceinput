@@ -221,14 +221,11 @@ static int start_recording(void) {
         return -1;
     }
 
-    // Wait for audio hardware to actually start capturing.
-    // The microphone and ALSA need time to initialize buffers before audio frames
-    // arrive. Without this, the notification appears and the user speaks before
-    // the first callback has even fired. 1.5s gives most hardware time to warm up.
-    usleep(1500000);  // 1.5 seconds
-
+    // Show notification immediately — VAD only records when speech is detected,
+    // so silence is discarded and doesn't waste buffer space.
     g_recording = 1;
     set_state("recording");
+
     return 0;
 }
 
