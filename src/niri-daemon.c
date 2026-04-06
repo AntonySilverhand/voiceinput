@@ -173,9 +173,11 @@ static int process_and_inject(void) {
         vi_textproc_trim_whitespace(transcribed);
     }
 
-    // Inject text
+    // Inject text — do NOT show a notification here, it can steal focus
+    // and cause the paste keystroke to go to the wrong window.
     fprintf(stderr, "Injecting text...\n");
-    set_state("typing");
+    close_all_notifications();
+    usleep(50000);
     int ret = vi_inject_text(&g_injector, transcribed);
 
     if (ret < 0) {

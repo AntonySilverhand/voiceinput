@@ -140,8 +140,8 @@ int vi_audio_init(vi_audio_ctx_t *ctx, int sample_rate, int channels) {
         return -1;
     }
 
-    // Create ring buffer (10 seconds capacity - enough for most dictation)
-    size_t buffer_capacity = sample_rate * channels * 10;
+    // Create ring buffer (60 seconds capacity)
+    size_t buffer_capacity = sample_rate * channels * 60;
     ctx->buffer = vi_ring_buffer_create(buffer_capacity);
     if (!ctx->buffer) {
         Pa_Terminate();
@@ -206,54 +206,49 @@ int vi_audio_init(vi_audio_ctx_t *ctx, int sample_rate, int channels) {
         return -1;
     }
 
+    // Start the stream immediately and keep it running permanently.
+    // The callback returns paContinue without storing data when
+    // is_recording is false, so there is no CPU cost while idle.
+    // This eliminates Pa_StartStream latency when recording begins.
+    err = Pa_StartStream(ctx->portaudio_stream);
+    if (err != paNoError) {
+        fprintf(stderr, "Failed to start audio stream: %s\n", Pa_GetErrorText(err));
+        vi_audio_cleanup(ctx);
+        return -1;
+    }
+
     return 0;
 }
 
 int vi_audio_start(vi_audio_ctx_t *ctx) {
     if (!ctx || !ctx->portaudio_stream) return -1;
 
-    // CRITICAL: Clear ring buffer BEFORE starting new recording
-    // This prevents previous recordings from being included
+    // Clear ring buffer before starting new recording
     if (ctx->buffer) {
+        pthread_mutex_lock(&g_ring_mutex);
         ctx->buffer->size = 0;
         ctx->buffer->read_pos = 0;
         ctx->buffer->write_pos = 0;
-        memset(ctx->buffer->data, 0, ctx->buffer->capacity * sizeof(float));
+        pthread_mutex_unlock(&g_ring_mutex);
     }
 
-    // Reset VAD state — silence before speech onset should not be recorded
+    // Reset VAD state
     ctx->vad_triggered = 0;
     ctx->vad_energy = 0.0f;
 
-    // Set flag BEFORE starting stream — PortAudio callback may fire immediately
-    // and we cannot afford to drop the first frames.
+    // Stream is already running — just flip the flag.
+    // The callback will start storing audio on its next invocation,
+    // which is at most one buffer period (~16ms at 256 frames/16kHz) away.
     ctx->is_recording = true;
-
-    PaError err = Pa_StartStream(ctx->portaudio_stream);
-    if (err != paNoError) {
-        ctx->is_recording = false;
-        fprintf(stderr, "Failed to start audio stream: %s\n", Pa_GetErrorText(err));
-        return -1;
-    }
-
     return 0;
 }
 
 int vi_audio_stop(vi_audio_ctx_t *ctx) {
     if (!ctx || !ctx->portaudio_stream) return -1;
 
-    // Stop stream first — this drains PortAudio's internal buffers via the callback.
-    // Only AFTER the stream has fully stopped, set is_recording = false.
-    // If we set is_recording = false first, the callback stops pushing data
-    // before PortAudio has drained its internal buffers, losing the last chunk.
-    PaError err = Pa_StopStream(ctx->portaudio_stream);
-    if (err != paNoError) {
-        fprintf(stderr, "Failed to stop audio stream: %s\n", Pa_GetErrorText(err));
-        return -1;
-    }
-
+    // Just clear the flag. The stream keeps running so the next
+    // recording starts without Pa_StartStream latency.
     ctx->is_recording = false;
-
     return 0;
 }
 

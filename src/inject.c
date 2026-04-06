@@ -16,10 +16,18 @@
 // Compositor handles stuck-key cleanup automatically if we crash.
 // ============================================================================
 
+// Evdev key codes are laid out by physical position, NOT alphabetically.
+// A lookup table is required — arithmetic like KEY_A + (c - 'a') is wrong.
+static const int letter_keycodes[26] = {
+    KEY_A, KEY_B, KEY_C, KEY_D, KEY_E, KEY_F, KEY_G, KEY_H, KEY_I,
+    KEY_J, KEY_K, KEY_L, KEY_M, KEY_N, KEY_O, KEY_P, KEY_Q, KEY_R,
+    KEY_S, KEY_T, KEY_U, KEY_V, KEY_W, KEY_X, KEY_Y, KEY_Z
+};
+
 // Map ASCII characters to evdev key codes (US QWERTY layout)
 static int ascii_to_keycode(int c) {
-    if (c >= 'a' && c <= 'z') return KEY_A + (c - 'a');
-    if (c >= 'A' && c <= 'Z') return KEY_A + (c - 'A');
+    if (c >= 'a' && c <= 'z') return letter_keycodes[c - 'a'];
+    if (c >= 'A' && c <= 'Z') return letter_keycodes[c - 'A'];
     if (c >= '1' && c <= '9') return KEY_1 + (c - '1');
     if (c == '0') return KEY_0;
     if (c == ' ') return KEY_SPACE;
@@ -74,6 +82,7 @@ static int ascii_needs_shift(int c) {
 
 struct libei_inject {
     struct ei *ctx;
+    struct ei_seat *seat;
     struct ei_device *keyboard;
     int connected;
 };
@@ -122,6 +131,46 @@ static int wait_for_keyboard_device(struct ei *ctx, int timeout_ms) {
         ei_event_unref(event);
     }
     return -1;
+}
+
+// Request a new keyboard device from the compositor via the existing seat.
+static int libei_acquire_keyboard(struct libei_inject *li) {
+    if (!li || !li->ctx || !li->seat) return -1;
+
+    ei_seat_bind_capabilities(li->seat, EI_DEVICE_CAP_KEYBOARD, NULL);
+
+    int found = 0;
+    for (int i = 0; i < 50; i++) {
+        if (wait_for_keyboard_device(li->ctx, 200) == 0) {
+            found = 1;
+            break;
+        }
+    }
+    if (!found) return -1;
+
+    struct ei_event *event;
+    ei_dispatch(li->ctx);
+    while ((event = ei_get_event(li->ctx)) != NULL) {
+        if (ei_event_get_type(event) == EI_EVENT_DEVICE_ADDED) {
+            struct ei_device *dev = ei_event_get_device(event);
+            if (dev && ei_device_has_capability(dev, EI_DEVICE_CAP_KEYBOARD)) {
+                li->keyboard = dev;
+                ei_device_ref(li->keyboard);
+            }
+        }
+        ei_event_unref(event);
+    }
+
+    return li->keyboard ? 0 : -1;
+}
+
+// Release the keyboard device so the compositor drops it from input routing.
+static void libei_release_keyboard(struct libei_inject *li) {
+    if (!li || !li->keyboard) return;
+    ei_device_stop_emulating(li->keyboard);
+    ei_device_close(li->keyboard);
+    ei_device_unref(li->keyboard);
+    li->keyboard = NULL;
 }
 
 int vi_inject_libei_init(struct libei_inject *li) {
@@ -190,19 +239,21 @@ int vi_inject_libei_init(struct libei_inject *li) {
     }
     fprintf(stderr, "libei: SEAT_ADDED received\n");
 
-    // Get the seat from events
+    // Get the seat from events and keep it for later device requests
     struct ei_event *event;
-    struct ei_seat *seat = NULL;
     ei_dispatch(li->ctx);
     while ((event = ei_get_event(li->ctx)) != NULL) {
         if (ei_event_get_type(event) == EI_EVENT_SEAT_ADDED) {
-            seat = ei_event_get_seat(event);
-            if (seat) ei_seat_ref(seat);
+            struct ei_seat *s = ei_event_get_seat(event);
+            if (s) {
+                li->seat = s;
+                ei_seat_ref(li->seat);
+            }
         }
         ei_event_unref(event);
     }
 
-    if (!seat) {
+    if (!li->seat) {
         fprintf(stderr, "libei: could not get seat\n");
         ei_disconnect(li->ctx);
         ei_unref(li->ctx);
@@ -210,45 +261,11 @@ int vi_inject_libei_init(struct libei_inject *li) {
         return -1;
     }
 
-    // Bind keyboard capability
-    ei_seat_bind_capabilities(seat, EI_DEVICE_CAP_KEYBOARD, NULL);
-
-    // Wait for keyboard device
-    int found = 0;
-    for (int i = 0; i < 50; i++) {
-        if (wait_for_keyboard_device(li->ctx, 200) == 0) {
-            found = 1;
-            break;
-        }
-    }
-
-    if (!found) {
+    // Acquire initial keyboard device to verify everything works
+    if (libei_acquire_keyboard(li) < 0) {
         fprintf(stderr, "libei: no keyboard device appeared\n");
-        ei_seat_unref(seat);
-        ei_disconnect(li->ctx);
-        ei_unref(li->ctx);
-        li->ctx = NULL;
-        return -1;
-    }
-    fprintf(stderr, "libei: keyboard device appeared\n");
-
-    // Get the keyboard device
-    ei_dispatch(li->ctx);
-    while ((event = ei_get_event(li->ctx)) != NULL) {
-        if (ei_event_get_type(event) == EI_EVENT_DEVICE_ADDED) {
-            struct ei_device *dev = ei_event_get_device(event);
-            if (dev && ei_device_has_capability(dev, EI_DEVICE_CAP_KEYBOARD)) {
-                li->keyboard = dev;
-                ei_device_ref(li->keyboard);
-            }
-        }
-        ei_event_unref(event);
-    }
-
-    ei_seat_unref(seat);
-
-    if (!li->keyboard) {
-        fprintf(stderr, "libei: could not obtain keyboard device\n");
+        ei_seat_unref(li->seat);
+        li->seat = NULL;
         ei_disconnect(li->ctx);
         ei_unref(li->ctx);
         li->ctx = NULL;
@@ -261,7 +278,15 @@ int vi_inject_libei_init(struct libei_inject *li) {
 }
 
 int vi_inject_libei_text(struct libei_inject *li, const char *text) {
-    if (!li || !li->connected || !li->keyboard || !text) return -1;
+    if (!li || !li->connected || !text) return -1;
+
+    // Acquire a fresh keyboard device for this injection.
+    // It will be released afterwards so the compositor immediately
+    // drops it from input routing, giving the physical keyboard back.
+    if (!li->keyboard && libei_acquire_keyboard(li) < 0) {
+        fprintf(stderr, "libei: failed to acquire keyboard for injection\n");
+        return -1;
+    }
 
     ei_device_start_emulating(li->keyboard, 0);
 
@@ -298,17 +323,18 @@ int vi_inject_libei_text(struct libei_inject *li, const char *text) {
         usleep(3000);
     }
 
-    ei_device_stop_emulating(li->keyboard);
+    // Release the keyboard device — compositor removes the emulated
+    // keyboard from its routing table so the physical keyboard works.
+    libei_release_keyboard(li);
     return 0;
 }
 
 void vi_inject_libei_cleanup(struct libei_inject *li) {
     if (!li) return;
-    if (li->keyboard) {
-        ei_device_stop_emulating(li->keyboard);
-        ei_device_close(li->keyboard);
-        ei_device_unref(li->keyboard);
-        li->keyboard = NULL;
+    libei_release_keyboard(li);
+    if (li->seat) {
+        ei_seat_unref(li->seat);
+        li->seat = NULL;
     }
     if (li->ctx) {
         ei_disconnect(li->ctx);
@@ -319,7 +345,136 @@ void vi_inject_libei_cleanup(struct libei_inject *li) {
 }
 
 // ============================================================================
-// wtype fallback (direct keyboard simulation)
+// Clipboard injection: wl-copy + wtype paste keystroke
+// Detects terminal apps and uses Ctrl+Shift+V, otherwise Ctrl+V.
+// ============================================================================
+
+// Known terminal app_ids (checked against niri's focused-window app_id)
+static int is_terminal_app(const char *app_id) {
+    if (!app_id) return 0;
+    const char *terminals[] = {
+        "kitty", "alacritty", "foot", "wezterm", "ghostty",
+        "gnome-terminal", "konsole", "xfce4-terminal", "tilix",
+        "terminator", "sakura", "st", "urxvt", "xterm",
+        NULL
+    };
+    for (int i = 0; terminals[i]; i++) {
+        if (strstr(app_id, terminals[i]) != NULL) return 1;
+    }
+    return 0;
+}
+
+// Query niri for the focused window's app_id and window id.
+// Returns window id (>0) on success, fills app_id buffer. Returns -1 on failure.
+static int get_focused_window(char *app_id, size_t app_id_sz, int *window_id) {
+    if (app_id) app_id[0] = '\0';
+    if (window_id) *window_id = -1;
+
+    FILE *fp = popen("niri msg -j focused-window 2>/dev/null", "r");
+    if (!fp) return -1;
+
+    char buf[1024];
+    size_t n = fread(buf, 1, sizeof(buf) - 1, fp);
+    pclose(fp);
+    if (n == 0) return -1;
+    buf[n] = '\0';
+
+    // Parse "app_id":"<value>"
+    if (app_id) {
+        const char *p = strstr(buf, "\"app_id\":\"");
+        if (p) {
+            p += strlen("\"app_id\":\"");
+            const char *end = strchr(p, '"');
+            if (end) {
+                size_t len = (size_t)(end - p);
+                if (len >= app_id_sz) len = app_id_sz - 1;
+                memcpy(app_id, p, len);
+                app_id[len] = '\0';
+            }
+        }
+    }
+
+    // Parse "id":<number>
+    if (window_id) {
+        const char *p = strstr(buf, "\"id\":");
+        if (p) {
+            *window_id = atoi(p + 5);
+        }
+    }
+
+    return (window_id && *window_id > 0) ? *window_id : -1;
+}
+
+static int inject_via_clipboard(const char *text) {
+    if (!text || strlen(text) == 0) return -1;
+
+    char app_id[128];
+    int win_id = -1;
+    get_focused_window(app_id, sizeof(app_id), &win_id);
+    int use_shift = is_terminal_app(app_id);
+
+    fprintf(stderr, "Focused app: %s (paste: Ctrl+%sV, win_id=%d)\n",
+            app_id[0] ? app_id : "unknown", use_shift ? "Shift+" : "", win_id);
+
+    // Step 1: wl-copy — pipe text to it
+    int pipefd[2];
+    if (pipe(pipefd) < 0) return -1;
+
+    pid_t pid = fork();
+    if (pid < 0) { close(pipefd[0]); close(pipefd[1]); return -1; }
+
+    if (pid == 0) {
+        close(pipefd[1]);
+        dup2(pipefd[0], STDIN_FILENO);
+        close(pipefd[0]);
+        execlp("wl-copy", "wl-copy", NULL);
+        _exit(127);
+    }
+
+    close(pipefd[0]);
+    write(pipefd[1], text, strlen(text));
+    close(pipefd[1]);
+    waitpid(pid, NULL, 0);
+
+    // Brief pause for compositor to register clipboard
+    usleep(30000);
+
+    // Step 2: wtype paste
+    pid = fork();
+    if (pid == 0) {
+        if (use_shift) {
+            execlp("wtype", "wtype",
+                   "-M", "ctrl", "-M", "shift", "-k", "v",
+                   "-m", "shift", "-m", "ctrl", NULL);
+        } else {
+            execlp("wtype", "wtype",
+                   "-M", "ctrl", "-k", "v", "-m", "ctrl", NULL);
+        }
+        _exit(127);
+    }
+    waitpid(pid, NULL, 0);
+
+    // Step 3: wtype's virtual keyboard corrupts niri's keyboard routing.
+    // Fix it with a minimal focus cycle — switch to previous window and back.
+    // Runs in background so it doesn't delay the return.
+    if (win_id > 0) {
+        if (fork() == 0) {
+            usleep(10000);
+            system("niri msg action focus-window-previous 2>/dev/null");
+            usleep(10000);
+            char cmd[64];
+            snprintf(cmd, sizeof(cmd),
+                     "niri msg action focus-window --id %d 2>/dev/null", win_id);
+            system(cmd);
+            _exit(0);
+        }
+    }
+
+    return 0;
+}
+
+// ============================================================================
+// wtype direct fallback (character-by-character keyboard simulation)
 // ============================================================================
 
 static int inject_via_wtype(const char *text) {
@@ -329,7 +484,6 @@ static int inject_via_wtype(const char *text) {
     if (pid < 0) return -1;
 
     if (pid == 0) {
-        // Child: exec wtype directly, no shell involved
         execlp("wtype", "wtype", "--", text, NULL);
         _exit(127);
     }
@@ -340,44 +494,61 @@ static int inject_via_wtype(const char *text) {
 }
 
 // ============================================================================
-// Public inject API — auto-detect, libei first, wtype fallback
+// Public inject API — clipboard preferred, libei/wtype fallbacks
 // ============================================================================
 
 int vi_inject_init(vi_inject_ctx_t *ctx, vi_inject_method_t method) {
-    (void)method; // libei is always preferred
+    (void)method;
     if (!ctx) return -1;
 
     memset(ctx, 0, sizeof(vi_inject_ctx_t));
 
-    struct libei_inject *li = calloc(1, sizeof(struct libei_inject));
-    if (!li) return -1;
-
-    if (vi_inject_libei_init(li) == 0) {
-        ctx->libei_context = li;
-        fprintf(stderr, "Text injector: using libei (safe keyboard simulation)\n");
+    // Prefer clipboard injection: wl-copy sets clipboard, then a single
+    // wtype Ctrl+V pastes it.  One keystroke is far less likely to corrupt
+    // compositor keyboard state than typing every character.
+    if (system("which wl-copy > /dev/null 2>&1") == 0 &&
+        system("which wtype > /dev/null 2>&1") == 0) {
+        ctx->method = VI_INJECT_CLIPBOARD;
+        fprintf(stderr, "Text injector: using clipboard (wl-copy + wtype Ctrl+V)\n");
         return 0;
     }
 
+    // Try libei
+    struct libei_inject *li = calloc(1, sizeof(struct libei_inject));
+    if (li && vi_inject_libei_init(li) == 0) {
+        libei_release_keyboard(li);
+        ctx->libei_context = li;
+        ctx->method = VI_INJECT_LIBEI;
+        fprintf(stderr, "Text injector: using libei\n");
+        return 0;
+    }
     free(li);
     ctx->libei_context = NULL;
 
-    // Fall back to wtype
-    if (system("which wtype > /dev/null 2>&1") != 0) {
-        fprintf(stderr, "Text injector: neither libei nor wtype available\n");
-        return -1;
+    // Fall back to wtype direct
+    if (system("which wtype > /dev/null 2>&1") == 0) {
+        ctx->method = VI_INJECT_WTYPE;
+        fprintf(stderr, "Text injector: using wtype (direct)\n");
+        return 0;
     }
 
-    fprintf(stderr, "Text injector: using wtype (fallback)\n");
-    return 0;
+    fprintf(stderr, "Text injector: no injection method available\n");
+    return -1;
 }
 
 int vi_inject_text(vi_inject_ctx_t *ctx, const char *text) {
     if (!ctx || !text || strlen(text) == 0) return -1;
 
+    if (ctx->method == VI_INJECT_CLIPBOARD) {
+        int ret = inject_via_clipboard(text);
+        if (ret == 0) return 0;
+        fprintf(stderr, "Clipboard injection failed, trying fallbacks...\n");
+    }
+
     if (ctx->libei_context) {
         int ret = vi_inject_libei_text(ctx->libei_context, text);
         if (ret == 0) return 0;
-        fprintf(stderr, "libei injection failed, trying wtype fallback...\n");
+        fprintf(stderr, "libei injection failed, trying wtype...\n");
     }
 
     return inject_via_wtype(text);
