@@ -504,8 +504,18 @@ int vi_inject_init(vi_inject_ctx_t *ctx, vi_inject_method_t method) {
     memset(ctx, 0, sizeof(vi_inject_ctx_t));
     vi_desktop_t desktop = vi_desktop_detect();
 
-    // Prefer libei on GNOME/Wayland or Niri as it's cleaner than clipboard
-    if (desktop == VI_DESKTOP_GNOME || desktop == VI_DESKTOP_NIRI || vi_is_wayland()) {
+    // NIRI SPECIAL CASE: Use clipboard-paste logic as it's the most reliable there.
+    if (desktop == VI_DESKTOP_NIRI) {
+        if (system("which wl-copy > /dev/null 2>&1") == 0 &&
+            system("which wtype > /dev/null 2>&1") == 0) {
+            ctx->method = VI_INJECT_CLIPBOARD;
+            fprintf(stderr, "Text injector: using clipboard for Niri (preferred)\n");
+            return 0;
+        }
+    }
+
+    // Prefer libei on GNOME/Wayland as it's cleaner than clipboard
+    if (desktop == VI_DESKTOP_GNOME || (desktop != VI_DESKTOP_NIRI && vi_is_wayland())) {
         struct libei_inject *li = calloc(1, sizeof(struct libei_inject));
         if (li && vi_inject_libei_init(li) == 0) {
             libei_release_keyboard(li);
