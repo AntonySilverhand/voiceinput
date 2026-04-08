@@ -502,33 +502,33 @@ int vi_inject_init(vi_inject_ctx_t *ctx, vi_inject_method_t method) {
     if (!ctx) return -1;
 
     memset(ctx, 0, sizeof(vi_inject_ctx_t));
+    vi_desktop_t desktop = vi_desktop_detect();
 
-    // Prefer clipboard injection: wl-copy sets clipboard, then a single
-    // wtype Ctrl+V pastes it.  One keystroke is far less likely to corrupt
-    // compositor keyboard state than typing every character.
+    // Prefer libei on GNOME/Wayland or Niri as it's cleaner than clipboard
+    if (desktop == VI_DESKTOP_GNOME || desktop == VI_DESKTOP_NIRI || vi_is_wayland()) {
+        struct libei_inject *li = calloc(1, sizeof(struct libei_inject));
+        if (li && vi_inject_libei_init(li) == 0) {
+            libei_release_keyboard(li);
+            ctx->libei_context = li;
+            ctx->method = VI_INJECT_LIBEI;
+            fprintf(stderr, "Text injector: using libei (detected desktop: %s)\n", vi_desktop_to_str(desktop));
+            return 0;
+        }
+        free(li);
+    }
+
+    // Fall back to clipboard injection
     if (system("which wl-copy > /dev/null 2>&1") == 0 &&
         system("which wtype > /dev/null 2>&1") == 0) {
         ctx->method = VI_INJECT_CLIPBOARD;
-        fprintf(stderr, "Text injector: using clipboard (wl-copy + wtype Ctrl+V)\n");
+        fprintf(stderr, "Text injector: using clipboard fallback (wl-copy + wtype)\n");
         return 0;
     }
 
-    // Try libei
-    struct libei_inject *li = calloc(1, sizeof(struct libei_inject));
-    if (li && vi_inject_libei_init(li) == 0) {
-        libei_release_keyboard(li);
-        ctx->libei_context = li;
-        ctx->method = VI_INJECT_LIBEI;
-        fprintf(stderr, "Text injector: using libei\n");
-        return 0;
-    }
-    free(li);
-    ctx->libei_context = NULL;
-
-    // Fall back to wtype direct
+    // Last resort: wtype direct
     if (system("which wtype > /dev/null 2>&1") == 0) {
         ctx->method = VI_INJECT_WTYPE;
-        fprintf(stderr, "Text injector: using wtype (direct)\n");
+        fprintf(stderr, "Text injector: using wtype (direct fallback)\n");
         return 0;
     }
 

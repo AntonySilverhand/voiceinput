@@ -5,6 +5,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <signal.h>
+#include "desktop.h"
 
 // ============================================================================
 // Constants
@@ -215,11 +216,8 @@ int vi_history_add(vi_history_ctx_t *ctx, const char *text);
 int vi_history_get(vi_history_ctx_t *ctx, int index, char **text);
 void vi_history_cleanup(vi_history_ctx_t *ctx);
 
-// ring buffer utilities
-vi_ring_buffer_t *vi_ring_buffer_create(size_t capacity);
-void vi_ring_buffer_destroy(vi_ring_buffer_t *buf);
-int vi_ring_buffer_push(vi_ring_buffer_t *buf, const float *data, size_t len);
-int vi_ring_buffer_pop(vi_ring_buffer_t *buf, float *data, size_t len);
-size_t vi_ring_buffer_size(vi_ring_buffer_t *buf);
+// indicator.c
+void vi_indicator_set_state(vi_state_t state);
+void vi_indicator_show_notification(const char *text, const char *icon, int timeout_ms);
 
 #endif // VOICEINPUT_H
