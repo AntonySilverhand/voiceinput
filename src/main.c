@@ -10,6 +10,17 @@
 #include <fcntl.h>
 #include <errno.h>
 #include <curl/curl.h>
+#include <time.h>
+
+// ============================================================================
+// Timing Helpers
+// ============================================================================
+
+static double now_ms(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return ts.tv_sec * 1000.0 + ts.tv_nsec / 1e6;
+}
 
 // ============================================================================
 // Global State
@@ -75,7 +86,7 @@ static int start_recording(vi_ctx_t *ctx) {
 static int stop_recording(vi_ctx_t *ctx) {
     if (ctx->state != VI_STATE_RECORDING) return 0;
 
-    printf("Stopping recording...\n");
+    printf("[%.3f] Stopping recording...\n", now_ms());
     vi_audio_stop(&ctx->audio);
     ctx->state = VI_STATE_PROCESSING;
     vi_indicator_set_state(VI_STATE_PROCESSING);
@@ -92,6 +103,7 @@ static int stop_recording(vi_ctx_t *ctx) {
 
     char *transcribed = NULL;
     size_t transcribed_len = 0;
+    double t_api_start = now_ms();
     if (vi_gemini_transcribe(&ctx->gemini, audio_data, audio_len,
                              &transcribed, &transcribed_len,
                              ctx->config.refinement_enabled) < 0) {
@@ -101,19 +113,28 @@ static int stop_recording(vi_ctx_t *ctx) {
         vi_indicator_set_state(VI_STATE_IDLE);
         return -1;
     }
+    double t_api_end = now_ms();
     free(audio_data);
 
     vi_textproc_trim_whitespace(transcribed);
 
     if (ctx->config.history_enabled) vi_history_add(&ctx->history, transcribed);
 
-    printf("Injecting: %s\n", transcribed);
+    printf("[%.3f] Injecting: %s\n", now_ms(), transcribed);
     ctx->state = VI_STATE_INJECTING;
     vi_indicator_set_state(VI_STATE_INJECTING);
 
+    double t_inject_start = now_ms();
     if (vi_inject_text(&ctx->injector, transcribed) < 0) {
         fprintf(stderr, "Injection failed\n");
     }
+    double t_inject_end = now_ms();
+
+    printf("[%.3f] API call: %.0f ms | Injection: %.0f ms | Total after stop: %.0f ms\n",
+           now_ms(),
+           t_api_end - t_api_start,
+           t_inject_end - t_inject_start,
+           t_inject_end - t_api_start);
 
     free(transcribed);
     ctx->state = VI_STATE_IDLE;
