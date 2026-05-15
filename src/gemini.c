@@ -211,6 +211,14 @@ int vi_gemini_transcribe(vi_gemini_ctx_t *ctx, const float *audio,
     json_object_object_add(system_instruction, "parts", si_parts);
     json_object_object_add(root, "system_instruction", system_instruction);
 
+    // Minimize thinking latency for fastest response
+    struct json_object *generation_config = json_object_new_object();
+    struct json_object *thinking_config = json_object_new_object();
+    json_object_object_add(thinking_config, "thinkingLevel",
+                           json_object_new_string("MINIMAL"));
+    json_object_object_add(generation_config, "thinkingConfig", thinking_config);
+    json_object_object_add(root, "generationConfig", generation_config);
+
     free(base64_audio);
 
     const char *json_str = json_object_to_json_string(root);
