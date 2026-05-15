@@ -92,7 +92,9 @@ static int stop_recording(vi_ctx_t *ctx) {
 
     char *transcribed = NULL;
     size_t transcribed_len = 0;
-    if (vi_gemini_transcribe(&ctx->gemini, audio_data, audio_len, &transcribed, &transcribed_len) < 0) {
+    if (vi_gemini_transcribe(&ctx->gemini, audio_data, audio_len,
+                             &transcribed, &transcribed_len,
+                             ctx->config.refinement_enabled) < 0) {
         fprintf(stderr, "Transcription failed\n");
         free(audio_data);
         ctx->state = VI_STATE_IDLE;
@@ -101,17 +103,7 @@ static int stop_recording(vi_ctx_t *ctx) {
     }
     free(audio_data);
 
-    if (ctx->config.refinement_enabled) {
-        char *refined = NULL;
-        size_t refined_len = 0;
-        if (vi_gemini_refine(&ctx->gemini, transcribed, &refined, &refined_len) == 0 && refined) {
-            free(transcribed);
-            transcribed = refined;
-        }
-    }
-
     vi_textproc_trim_whitespace(transcribed);
-    if (ctx->config.remove_fillers) vi_textproc_remove_fillers(transcribed);
 
     if (ctx->config.history_enabled) vi_history_add(&ctx->history, transcribed);
 

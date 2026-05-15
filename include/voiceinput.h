@@ -189,7 +189,8 @@ int vi_audio_get_chunk(vi_audio_ctx_t *ctx, float **data, size_t *len);
 // gemini.c
 int vi_gemini_init(vi_gemini_ctx_t *ctx, const char *api_key);
 int vi_gemini_transcribe(vi_gemini_ctx_t *ctx, const float *audio,
-                         size_t len, char **text, size_t *text_len);
+                         size_t len, char **text, size_t *text_len,
+                         bool refine);
 int vi_gemini_refine(vi_gemini_ctx_t *ctx, const char *input,
                      char **output, size_t *output_len);
 void vi_gemini_cleanup(vi_gemini_ctx_t *ctx);

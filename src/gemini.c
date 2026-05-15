@@ -141,7 +141,8 @@ static char *normalize_audio_to_wav(const float *audio, size_t len, size_t *out_
 }
 
 int vi_gemini_transcribe(vi_gemini_ctx_t *ctx, const float *audio,
-                         size_t len, char **text, size_t *text_len) {
+                         size_t len, char **text, size_t *text_len,
+                         bool refine) {
     if (!ctx || !audio || !text || !text_len) return -1;
 
     *text = NULL;
@@ -183,12 +184,29 @@ int vi_gemini_transcribe(vi_gemini_ctx_t *ctx, const float *audio,
     json_object_array_add(contents, content);
     json_object_object_add(root, "contents", contents);
 
-    // Add system instruction for transcription
+    // System instruction: transcription only, or transcription + formatting
+    const char *system_prompt = refine
+        ? "You are a voice dictation assistant. Transcribe the audio and then format the result. Apply these steps strictly in order:\n\n"
+          "1. **Self-correction** — The speaker often interrupts themselves to correct a previous word. "
+          "When you see this pattern, DELETE the wrong word and KEEP the corrected one:\n"
+          "   - '...X. No, I mean Y.' => delete X, keep Y\n"
+          "   - '...X. Sorry, Y.' => delete X, keep Y\n"
+          "   - '...X. Wait, Y.' => delete X, keep Y\n"
+          "   - '...X not Y' => keep Y, delete X\n"
+          "   - Examples:\n"
+          "     'meeting at 2pm no 3pm' => 'meeting at 3pm'\n"
+          "     'Christina we have meeting tomorrow building 2pm no 3pm' => 'Christina, we have meeting tomorrow building 3pm'\n"
+          "     'at the park sorry at the office' => 'at the office'\n\n"
+          "2. **Autoformatting** — add punctuation (. , ? !) and fix capitalization (first letter uppercase).\n\n"
+          "3. **Filler removal** — remove filler words: um, uh, like, you know, er, ah.\n\n"
+          "Return ONLY the final clean text, nothing else."
+        : "Transcribe the audio to text exactly. Return only the transcribed text, no explanations or commentary.";
+
     struct json_object *system_instruction = json_object_new_object();
     struct json_object *si_parts = json_object_new_array();
     struct json_object *si_part = json_object_new_object();
     json_object_object_add(si_part, "text",
-                           json_object_new_string("Transcribe the audio to text exactly. Return only the transcribed text, no explanations or commentary."));
+                           json_object_new_string(system_prompt));
     json_object_array_add(si_parts, si_part);
     json_object_object_add(system_instruction, "parts", si_parts);
     json_object_object_add(root, "system_instruction", system_instruction);
