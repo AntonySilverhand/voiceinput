@@ -199,6 +199,7 @@ int vi_gemini_transcribe(vi_gemini_ctx_t *ctx, const float *audio,
           "     'at the park sorry at the office' => 'at the office'\n\n"
           "2. **Autoformatting** — add punctuation (. , ? !) and fix capitalization (first letter uppercase).\n\n"
           "3. **Filler removal** — remove filler words: um, uh, like, you know, er, ah.\n\n"
+          "4. **Structure** — If the speaker describes a layout, diagram, spatial arrangement, or multi-step instructions, preserve every detail but reformat it using markdown bullet points, numbered steps, or tables so the structure is explicit and easy for a downstream agent to follow.\n\n"
           "Return ONLY the final clean text, nothing else."
         : "Transcribe the audio to text exactly. Return only the transcribed text, no explanations or commentary.";
 
@@ -303,6 +304,7 @@ int vi_gemini_refine(vi_gemini_ctx_t *ctx, const char *input,
         "     'at the park sorry at the office' => 'at the office'\n\n"
         "2. **Autoformatting** — add punctuation (. , ? !) and fix capitalization (first letter uppercase).\n\n"
         "3. **Filler removal** — remove filler words: um, uh, like, you know, er, ah.\n\n"
+        "4. **Structure** — If the speaker describes a layout, diagram, spatial arrangement, or multi-step instructions, preserve every detail but reformat it using markdown bullet points, numbered steps, or tables so the structure is explicit and easy for a downstream agent to follow.\n\n"
         "Return ONLY the final clean text, nothing else:\n\n%s", input);
 
     char url[512];

@@ -116,12 +116,12 @@ static int audio_callback(const void *input, void *output,
         ctx->vad_triggered = 1;
     }
 
-    // Only store audio once VAD has triggered (speech detected)
-    // This prevents silence from filling the buffer and overwriting
-    // the beginning of the utterance
-    if (ctx->vad_triggered) {
-        vi_ring_buffer_push(ctx->buffer, input_data, n);
-    }
+    // Store all audio while recording is active. VAD is tracked for
+    // potential auto-stop features, but we must not drop pre-trigger
+    // audio — the EMA smoothing delays detection and discards the
+    // beginning of the utterance. For long recordings the 60 s buffer
+    // was also too small and wrapped around, losing the start.
+    vi_ring_buffer_push(ctx->buffer, input_data, n);
 
     return paContinue;
 }
@@ -140,8 +140,8 @@ int vi_audio_init(vi_audio_ctx_t *ctx, int sample_rate, int channels) {
         return -1;
     }
 
-    // Create ring buffer (60 seconds capacity)
-    size_t buffer_capacity = sample_rate * channels * 60;
+    // Create ring buffer (600 seconds capacity — 10 minutes)
+    size_t buffer_capacity = sample_rate * channels * 600;
     ctx->buffer = vi_ring_buffer_create(buffer_capacity);
     if (!ctx->buffer) {
         Pa_Terminate();
