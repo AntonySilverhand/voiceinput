@@ -185,3 +185,72 @@ int vi_textproc_auto_punctuate(char **text) {
 
     return 0;
 }
+
+// ============================================================================
+// Strip Model-Generated Preamble
+// ============================================================================
+
+static const char *preamble_patterns[] = {
+    "Sure! Here is the cleaned and formatted text",
+    "Sure! Here is the transcription",
+    "Sure! Here is the text",
+    "Here is the cleaned and formatted text",
+    "Here is the transcription",
+    "Here is the text",
+    "The cleaned text is",
+    "The transcription is",
+    "The following is the transcription",
+    "Below is the transcription",
+    "Transcription:",
+    "Cleaned text:",
+    "Formatted text:",
+    NULL
+};
+
+char *vi_textproc_strip_preamble(char *text) {
+    if (!text || strlen(text) == 0) return text;
+
+    char *start = text;
+    int stripped = 0;
+
+    // Repeatedly check for preambles at the start
+    do {
+        stripped = 0;
+        // Skip leading whitespace
+        while (isspace(*start)) start++;
+
+        for (int i = 0; preamble_patterns[i] != NULL; i++) {
+            size_t pat_len = strlen(preamble_patterns[i]);
+            if (strncasecmp(start, preamble_patterns[i], pat_len) == 0) {
+                start += pat_len;
+                stripped = 1;
+                // Also consume any trailing colon, dash, or whitespace
+                while (*start == ':' || *start == '-' || isspace(*start)) start++;
+                break;
+            }
+        }
+    } while (stripped);
+
+    if (start != text) {
+        // Also strip any leading ```markdown or ``` blocks the model might add
+        while (isspace(*start)) start++;
+        if (strncmp(start, "```", 3) == 0) {
+            start += 3;
+            while (isalpha(*start)) start++; // skip language tag like "markdown"
+            while (isspace(*start)) start++;
+        }
+
+        size_t remaining = strlen(start);
+        memmove(text, start, remaining + 1);
+
+        // Strip trailing ``` if present
+        size_t len = strlen(text);
+        while (len > 3 && strncmp(text + len - 3, "```", 3) == 0) {
+            len -= 3;
+            while (len > 0 && isspace(text[len - 1])) len--;
+            text[len] = '\0';
+        }
+    }
+
+    return text;
+}

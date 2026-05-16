@@ -186,7 +186,8 @@ int vi_gemini_transcribe(vi_gemini_ctx_t *ctx, const float *audio,
 
     // System instruction: transcription only, or transcription + formatting
     const char *system_prompt = refine
-        ? "You are a voice dictation assistant. Transcribe the audio and then format the result. Apply these steps strictly in order:\n\n"
+        ? "You are a voice dictation assistant. Your sole job is to transcribe the audio verbatim and then apply the four formatting steps below. "
+          "Do NOT summarize, condense, or skip any content. Every sentence the speaker says must appear in the output.\n\n"
           "1. **Self-correction** — The speaker often interrupts themselves to correct a previous word. "
           "When you see this pattern, DELETE the wrong word and KEEP the corrected one:\n"
           "   - '...X. No, I mean Y.' => delete X, keep Y\n"
@@ -200,8 +201,17 @@ int vi_gemini_transcribe(vi_gemini_ctx_t *ctx, const float *audio,
           "2. **Autoformatting** — add punctuation (. , ? !) and fix capitalization (first letter uppercase).\n\n"
           "3. **Filler removal** — remove filler words: um, uh, like, you know, er, ah.\n\n"
           "4. **Structure** — If the speaker describes a layout, diagram, spatial arrangement, or multi-step instructions, preserve every detail but reformat it using markdown bullet points, numbered steps, or tables so the structure is explicit and easy for a downstream agent to follow.\n\n"
-          "Return ONLY the final clean text, nothing else."
-        : "Transcribe the audio to text exactly. Return only the transcribed text, no explanations or commentary.";
+          "CRITICAL OUTPUT RULES:\n"
+          "- The FIRST character of your output must be the FIRST word the speaker said.\n"
+          "- Do NOT write 'Sure!', 'Here is', 'The cleaned text is', 'The transcription is', or any other introduction.\n"
+          "- Do NOT add a summary, conclusion, or closing remark.\n"
+          "- Do NOT wrap the output in markdown code blocks (```).\n"
+          "- Return ONLY the final clean text, nothing else."
+        : "You are a voice dictation assistant. Transcribe the audio to text exactly. "
+          "The FIRST character of your output must be the FIRST word the speaker said. "
+          "Do NOT add any introduction, summary, or commentary. "
+          "Do NOT wrap the output in markdown code blocks. "
+          "Return only the transcribed text, nothing else.";
 
     struct json_object *system_instruction = json_object_new_object();
     struct json_object *si_parts = json_object_new_array();
@@ -218,6 +228,12 @@ int vi_gemini_transcribe(vi_gemini_ctx_t *ctx, const float *audio,
     json_object_object_add(thinking_config, "thinkingLevel",
                            json_object_new_string("MINIMAL"));
     json_object_object_add(generation_config, "thinkingConfig", thinking_config);
+    // Long-form transcription needs a high output token ceiling;
+    // without this the model silently truncates after ~8 k tokens.
+    json_object_object_add(generation_config, "maxOutputTokens",
+                           json_object_new_int(65536));
+    json_object_object_add(generation_config, "temperature",
+                           json_object_new_double(0.0));
     json_object_object_add(root, "generationConfig", generation_config);
 
     free(base64_audio);
@@ -269,6 +285,18 @@ int vi_gemini_transcribe(vi_gemini_ctx_t *ctx, const float *audio,
                         if (json_object_object_get_ex(first_part, "text", &text_obj)) {
                             *text = strdup(json_object_get_string(text_obj));
                             *text_len = strlen(*text);
+                        }
+                    }
+                }
+                // Detect silent truncation or other stop reasons
+                struct json_object *finish_reason;
+                if (json_object_object_get_ex(first_candidate, "finishReason", &finish_reason)) {
+                    const char *reason = json_object_get_string(finish_reason);
+                    if (reason) {
+                        if (strcmp(reason, "MAX_TOKENS") == 0) {
+                            printf("WARNING: Gemini hit max output tokens – transcription truncated.\n");
+                        } else if (strcmp(reason, "STOP") != 0) {
+                            printf("Gemini finishReason: %s\n", reason);
                         }
                     }
                 }
@@ -325,6 +353,13 @@ int vi_gemini_refine(vi_gemini_ctx_t *ctx, const char *input,
     json_object_array_add(contents, content);
     json_object_object_add(root, "contents", contents);
 
+    struct json_object *generation_config = json_object_new_object();
+    json_object_object_add(generation_config, "maxOutputTokens",
+                           json_object_new_int(65536));
+    json_object_object_add(generation_config, "temperature",
+                           json_object_new_double(0.0));
+    json_object_object_add(root, "generationConfig", generation_config);
+
     const char *json_str = json_object_to_json_string(root);
 
     struct gemini_response response = {0};
@@ -371,6 +406,17 @@ int vi_gemini_refine(vi_gemini_ctx_t *ctx, const char *input,
                         if (json_object_object_get_ex(first_part, "text", &text_obj)) {
                             *output = strdup(json_object_get_string(text_obj));
                             *output_len = strlen(*output);
+                        }
+                    }
+                }
+                struct json_object *finish_reason;
+                if (json_object_object_get_ex(first_candidate, "finishReason", &finish_reason)) {
+                    const char *reason = json_object_get_string(finish_reason);
+                    if (reason) {
+                        if (strcmp(reason, "MAX_TOKENS") == 0) {
+                            printf("WARNING: Gemini hit max output tokens – refinement truncated.\n");
+                        } else if (strcmp(reason, "STOP") != 0) {
+                            printf("Gemini finishReason: %s\n", reason);
                         }
                     }
                 }

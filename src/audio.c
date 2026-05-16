@@ -31,6 +31,16 @@ vi_ring_buffer_t *vi_ring_buffer_create(size_t capacity) {
     return buf;
 }
 
+void vi_ring_buffer_clear(vi_ring_buffer_t *buf) {
+    if (!buf) return;
+    pthread_mutex_lock(&g_ring_mutex);
+    buf->size = 0;
+    buf->read_pos = 0;
+    buf->write_pos = 0;
+    memset(buf->data, 0, buf->capacity * sizeof(float));
+    pthread_mutex_unlock(&g_ring_mutex);
+}
+
 void vi_ring_buffer_destroy(vi_ring_buffer_t *buf) {
     if (!buf) return;
     free(buf->data);
@@ -229,6 +239,8 @@ int vi_audio_start(vi_audio_ctx_t *ctx) {
         ctx->buffer->size = 0;
         ctx->buffer->read_pos = 0;
         ctx->buffer->write_pos = 0;
+        // Zero the underlying data so any stray reads get silence
+        memset(ctx->buffer->data, 0, ctx->buffer->capacity * sizeof(float));
         pthread_mutex_unlock(&g_ring_mutex);
     }
 

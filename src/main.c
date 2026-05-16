@@ -73,11 +73,9 @@ static int start_recording(vi_ctx_t *ctx) {
     ctx->state = VI_STATE_RECORDING;
     vi_indicator_set_state(VI_STATE_RECORDING);
 
-    // Clear buffer
+    // Clear buffer (redundant with vi_audio_start, but belt-and-suspenders)
     if (ctx->audio.buffer) {
-        ctx->audio.buffer->size = 0;
-        ctx->audio.buffer->read_pos = 0;
-        ctx->audio.buffer->write_pos = 0;
+        vi_ring_buffer_clear(ctx->audio.buffer);
     }
 
     return vi_audio_start(&ctx->audio);
@@ -101,6 +99,9 @@ static int stop_recording(vi_ctx_t *ctx) {
         return -1;
     }
 
+    double audio_seconds = (double)audio_len / (ctx->config.sample_rate * ctx->config.channels);
+    printf("[%.3f] Captured %.1f s of audio (%.0f samples)\n", now_ms(), audio_seconds, (double)audio_len);
+
     char *transcribed = NULL;
     size_t transcribed_len = 0;
     double t_api_start = now_ms();
@@ -117,9 +118,12 @@ static int stop_recording(vi_ctx_t *ctx) {
     free(audio_data);
 
     vi_textproc_trim_whitespace(transcribed);
+    vi_textproc_strip_preamble(transcribed);
 
     if (ctx->config.history_enabled) vi_history_add(&ctx->history, transcribed);
 
+    printf("[%.3f] Transcribed %zu chars (%.0f words)\n", now_ms(), transcribed_len,
+           (double)transcribed_len / 6.0);
     printf("[%.3f] Injecting: %s\n", now_ms(), transcribed);
     ctx->state = VI_STATE_INJECTING;
     vi_indicator_set_state(VI_STATE_INJECTING);
@@ -130,11 +134,12 @@ static int stop_recording(vi_ctx_t *ctx) {
     }
     double t_inject_end = now_ms();
 
-    printf("[%.3f] API call: %.0f ms | Injection: %.0f ms | Total after stop: %.0f ms\n",
+    printf("[%.3f] API call: %.0f ms | Injection: %.0f ms | Total after stop: %.0f ms | Audio: %.1f s\n",
            now_ms(),
            t_api_end - t_api_start,
            t_inject_end - t_inject_start,
-           t_inject_end - t_api_start);
+           t_inject_end - t_api_start,
+           audio_seconds);
 
     free(transcribed);
     ctx->state = VI_STATE_IDLE;

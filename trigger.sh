@@ -3,15 +3,15 @@
 # Signals the voiceinput daemon to toggle recording
 
 FIFO="/tmp/voiceinput-trigger"
-DAEMON_BIN="/home/antony/coding/voiceinput/build/voiceinput-niri"
+DAEMON_BIN="/home/antony/coding/voiceinput/build/voiceinput"
 
 # Clear any stuck notifications
 pkill -f 'zenity.*VoiceInput' 2>/dev/null || true
 
-# Check if daemon is running
-if ! pgrep -f "voiceinput-niri" > /dev/null; then
+# Check if daemon is running (match either old or new binary name)
+if ! pgrep -f "voiceinput$" > /dev/null; then
     echo "Starting voiceinput daemon..."
-    nohup "$DAEMON_BIN" > /tmp/voiceinput-niri.log 2>&1 &
+    nohup "$DAEMON_BIN" > /tmp/voiceinput.log 2>&1 &
     sleep 1
 fi
 

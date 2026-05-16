@@ -180,6 +180,9 @@ int vi_config_save(const vi_config_t *config, const char *path);
 void vi_config_defaults(vi_config_t *config);
 
 // audio.c
+vi_ring_buffer_t *vi_ring_buffer_create(size_t capacity);
+void vi_ring_buffer_clear(vi_ring_buffer_t *buf);
+void vi_ring_buffer_destroy(vi_ring_buffer_t *buf);
 int vi_audio_init(vi_audio_ctx_t *ctx, int sample_rate, int channels);
 int vi_audio_start(vi_audio_ctx_t *ctx);
 int vi_audio_stop(vi_audio_ctx_t *ctx);
@@ -209,6 +212,7 @@ void vi_inject_cleanup(vi_inject_ctx_t *ctx);
 int vi_textproc_remove_fillers(char *text);
 int vi_textproc_trim_whitespace(char *text);
 int vi_textproc_auto_punctuate(char **text);
+char *vi_textproc_strip_preamble(char *text);
 
 // history.c
 int vi_history_init(vi_history_ctx_t *ctx, const char *db_path,
